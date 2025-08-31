@@ -170,7 +170,53 @@ public class MessagingResponse extends IRadioMessagingResponse.Stub {
      * @param smsc Short Message Service Center address on the device
      */
     public void getSmscAddressResponse(RadioResponseInfo responseInfo, String smsc) {
+        if (smsc != null && (smsc.contains("\"") || smsc.contains(","))) {
+            android.util.Log.e("SMSCFix", "Got weird SMSC: " + smsc);
+            try {
+                String[] a = smsc.split("\"");
+                smsc = a[1];
+            } catch (Throwable t) {
+                android.util.Log.e("SMSCFix", "Failed parsing weird smsc", t);
+                smsc = "";
+            }
+            android.util.Log.e("SMSCFix", "Patched smsc " + smsc);
+        }
+
+        // If SMSC is in PDU format
+        if (smsc != null && smsc.matches("^[0-9A-Fa-f]{12,}$") && smsc.startsWith("07")) {
+            String decoded = smscPduToPhoneNumber(smsc);
+            if (decoded != null && !decoded.isEmpty()) {
+                android.util.Log.e("SMSCFix", "Converted PDU SMSC to number: " + decoded);
+                smsc = decoded;
+            }
+        }
+        // If SMSC is a number without the '+' prefix
+        else if (smsc != null && smsc.matches("^[0-9]{10,}$") && !smsc.startsWith("+")) {
+            android.util.Log.e("SMSCFix", "SMSC looks like a number, prepending '+': " + smsc);
+            smsc = "+" + smsc;
+        }
         RadioResponse.responseString(HAL_SERVICE_MESSAGING, mRil, responseInfo, smsc);
+    }
+
+    /* Minimal BCD decode for SMSC PDU */
+    private static String smscPduToPhoneNumber(String pdu) {
+        try {
+            if (pdu.length() < 4) return null;
+            int len = Integer.parseInt(pdu.substring(0, 2), 16);
+            if (pdu.length() < (2 + len * 2)) return null;
+            int toa = Integer.parseInt(pdu.substring(2, 4), 16);
+            StringBuilder num = new StringBuilder();
+            for (int i = 4; i < 2 + len * 2; i += 2) {
+                char c1 = pdu.charAt(i + 1);
+                char c2 = pdu.charAt(i);
+                if (c1 != 'F' && c1 != 'f') num.append(c1);
+                if (c2 != 'F' && c2 != 'f') num.append(c2);
+            }
+            if ((toa & 0xF0) == 0x90) num.insert(0, '+');
+            return num.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
